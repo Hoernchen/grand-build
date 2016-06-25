@@ -54,27 +54,78 @@ set -e
 
 echo "Asking for sudo permissions to create prefix directory ${PREFIX}"
 sudo mkdir -p ${PREFIX}
+sudo mkdir -p $PREFIX/lib/
 sudo chown $USER:$USER -R ${PREFIX}
 sudo -K # invalidates credentials for anyone paranoid
 
 ANDROID_MIN_API_VERSION=21
 ANDROID_STANDALONE_TOOLCHAIN=${PREFIX}/android-toolchain
 PATH_ORIG=$PATH
-PATH=$PATH:$ANDROID_STANDALONE_TOOLCHAIN/bin:$ANDROID_SDK/tools:$ANDROID_NDK
+PATH=$ANDROID_STANDALONE_TOOLCHAIN/bin:$ANDROID_SDK/tools:$ANDROID_NDK:$PATH
 TOP_BUILD_DIR=`pwd`
 
-${ANDROID_NDK}/build/tools/make-standalone-toolchain.sh --stl=gnustl --arch=arm --platform=android-${ANDROID_MIN_API_VERSION} --abis=armeabi-v7a --install-dir=${ANDROID_STANDALONE_TOOLCHAIN}
+#### build ndk master
+#### building the ndk needs pkg TEXINFO for makeinfo!!!
+#mkdir bin
+#PATH=`pwd`/bin:$PATH
+#curl https://storage.googleapis.com/git-repo-downloads/repo > ./bin/repo
+#chmod a+x ./bin/repo
+#mkdir ndk
+#cd ndk
+#repo init -u https://android.googlesource.com/platform/manifest -b master-ndk
+#repo sync
+#cd ndk
+#./checkbuild.py
+
+###########################
+###crystax ndk fixes #########
+###########################
+
+### this doesn't play well with android.toolchain.cmake version parsing
+#rm ${ANDROID_NDK}/RELEASE.txt || true
+
+## sched fuckup in crystax 10.3.1
+## https://groups.google.com/forum/#!topic/crystax-ndk/W84bE09LtiU
+## https://github.com/crystax/android-platform-bionic/commit/9041d6a287d202c78b7bb888da2e4c93b44ee19e
+## ${ANDROID_NDK}/platforms/android-21/arch-arm/usr/include/crystax/bionic/libc/include/mangled-sched.h
 
 
-###########################################################
-#                   BOOST DEPENDENCY
-###########################################################
+## cheap fix for libcrystax dep
+#cp -a ${ANDROID_NDK}/sources/crystax/libs/armeabi-v7a/libcrystax.so ${ANDROID_NDK}/platforms/android-21/arch-arm/usr/lib/
+#cp -a ${ANDROID_NDK}/sources/crystax/libs/armeabi-v7a/libcrystax.a ${ANDROID_NDK}/platforms/android-21/arch-arm/usr/lib/
+#cp -a ${ANDROID_NDK}/sources/crystax/libs/armeabi-v7a/libcrystax.a ${ANDROID_NDK}/platforms/android-18/arch-arm/usr/lib/
+#cp -a ${ANDROID_NDK}/sources/crystax/libs/armeabi-v7a/libcrystax.so ${ANDROID_NDK}/platforms/android-18/arch-arm/usr/lib/
+
+#cp -a ${ANDROID_NDK}/sources/boost/1.59.0/include/ ${PREFIX}
+#cp -a ${ANDROID_NDK}/sources/boost/1.59.0/libs/armeabi-v7a/gnu-4.9/* ${PREFIX}/lib/
+
+###### end crystax fixes
+
+${ANDROID_NDK}/build/tools/make-standalone-toolchain.sh --toolchain=arm-linux-androideabi-clang --stl=libc++ --arch=arm --platform=android-${ANDROID_MIN_API_VERSION} --abis=armeabi-v7a --install-dir=${ANDROID_STANDALONE_TOOLCHAIN}
+
+#new android toolchain has python script
+#python ${ANDROID_NDK}/build/tools/make_standalone_toolchain.py --force --stl=gnustl --arch=arm --api=21 --install-dir=${ANDROID_STANDALONE_TOOLCHAIN}
+
+#unset ANDROID_NDK --standalone toolchain?
+
+## fix linking issues: shared/static prefix
+## the standalone toolchain has a renamed runtime, but the ndk doesn't
+## -> better safe than sorry
+mkdir -p $PREFIX/lib/
+cd $PREFIX/lib
+cp -a ${ANDROID_NDK}/sources/cxx-stl/llvm-libc++/libs/armeabi-v7a/libc++_shared.so .
+ln -s libc++_shared.so libc++.so || true
+cd $TOP_BUILD_DIR
+
+#############################################################
+###                   BOOST DEPENDENCY
+#############################################################
 
 echo ""; echo ""; echo ""; echo ""
 
-BOOST_VER=1.58.0
-BOOST_DIR=boost_1_58_0
-BOOST_URL="http://jaist.dl.sourceforge.net/project/boost/boost/1.58.0/boost_1_58_0.tar.bz2"
+BOOST_VER=1.61.0
+BOOST_DIR=boost_1_61_0
+BOOST_URL="http://jaist.dl.sourceforge.net/project/boost/boost/1.61.0/boost_1_61_0.tar.bz2"
 
 if [ -e "${BOOST_DIR}.tar.bz2" ];
 then
@@ -99,7 +150,8 @@ echo "import os ;
 local ANDROID_STANDALONE_TOOLCHAIN = [ os.environ ANDROID_STANDALONE_TOOLCHAIN ] ;
 
 using gcc : android :
-     ${ANDROID_STANDALONE_TOOLCHAIN}/bin/arm-linux-androideabi-g++ :
+     ${ANDROID_STANDALONE_TOOLCHAIN}/bin/clang++ :
+     <compileflags>--std=gnu++11
      <compileflags>--sysroot=${ANDROID_STANDALONE_TOOLCHAIN}/sysroot
      <compileflags>-march=armv7-a
      <compileflags>-mfloat-abi=softfp
@@ -108,7 +160,7 @@ using gcc : android :
      <compileflags>-O2
      <compileflags>-DNDEBUG
      <compileflags>-g
-     <compileflags>-lstdc++
+     <compileflags>-lc++_shared
      <compileflags>-I${ANDROID_STANDALONE_TOOLCHAIN}/include/c++/4.9/
      <compileflags>-I${ANDROID_STANDALONE_TOOLCHAIN}/include/c++/4.9/arm-linux-androideabi/armv7-a
      <compileflags>-D__GLIBC__
@@ -125,29 +177,29 @@ echo "Boostrapping and Building"
 ./bootstrap.sh
 ./b2 \
   --without-python --without-container --without-context \
-  --without-coroutine --without-graph --without-graph_parallel \
+  --without-coroutine --without-coroutine2 --without-graph --without-graph_parallel \
   --without-iostreams --without-locale --without-log --without-math \
   --without-mpi --without-signals --without-timer --without-wave \
   link=static runtime-link=static threading=multi threadapi=pthread \
-  target-os=linux --stagedir=android --build-dir=android \
-  stage
+  toolset=clang target-os=android --stagedir=android --build-dir=android variant=release \
+  stage -j 4
 
 echo "Installing"
 ./b2 \
   --without-python --without-container --without-context \
-  --without-coroutine --without-graph --without-graph_parallel \
+  --without-coroutine --without-coroutine2 --without-graph --without-graph_parallel \
   --without-iostreams --without-locale --without-log --without-math \
   --without-mpi --without-signals --without-timer --without-wave \
   link=static runtime-link=static threading=multi threadapi=pthread \
-  target-os=linux --stagedir=android --build-dir=android \
-  --prefix=$PREFIX install
+  toolset=clang target-os=android --stagedir=android --build-dir=android variant=release \
+  --prefix=$PREFIX install -j 4
 
 cd ${TOP_BUILD_DIR}
 
 
-############################################################
-##                   FFTW DEPENDENCY
-############################################################
+##############################################################
+####                   FFTW DEPENDENCY
+##############################################################
 
 echo ""; echo ""; echo ""; echo ""
 
@@ -178,7 +230,7 @@ mkdir -p build
 cd build
 
 export SYS_ROOT="$ANDROID_STANDALONE_TOOLCHAIN/sysroot"
-export CC="arm-linux-androideabi-gcc --sysroot=$SYS_ROOT"
+export CC="clang --sysroot=$SYS_ROOT"
 export LD="arm-linux-androideabi-ld"
 export AR="arm-linux-androideabi-ar"
 export RANLIB="arm-linux-androideabi-ranlib"
@@ -191,7 +243,7 @@ echo "Configuring FFTW"
   --host=armv7-eabi --build=x86_64-linux \
   --prefix=$PREFIX \
   LIBS="-lc -lgcc -march=armv7-a -mfloat-abi=softfp -mfpu=neon" \
-  CC="arm-linux-androideabi-gcc -march=armv7-a -mfloat-abi=softfp -mfpu=neon"
+  CC="clang -march=armv7-a -mfloat-abi=softfp -mfpu=neon"
 
 echo "\n\nBuilding and installing FFTW"
 make -s -j${PARALLEL}
@@ -208,9 +260,9 @@ cd ${TOP_BUILD_DIR}
 
 
 
-###########################################################
-#            OpenSSL (libcrypto) DEPENDENCY
-###########################################################
+#############################################################
+###            OpenSSL (libcrypto) DEPENDENCY
+#############################################################
 
 echo ""; echo ""; echo ""; echo ""
 
@@ -246,9 +298,11 @@ fi
 
 cd ${OPENSSL_DIR}
 
+
+### FIXME this sets android api to 18, but we want 21...
 wget https://wiki.openssl.org/images/7/70/Setenv-android.sh
 chmod +x Setenv-android.sh
-. ./Setenv-android.sh
+. ./Setenv-android.sh _ANDROID_API=21
 perl -pi -e 's/install: all install_docs install_sw/install: install_docs install_sw/g' Makefile.org
 ./config --prefix=/usr shared no-ssl2 no-ssl3 no-comp no-hw no-engines --openssldir=$ANDROID_STANDALONE_TOOLCHAIN/sysroot/usr/ssl/$ANDROID_API
 
@@ -269,9 +323,9 @@ PATH=$PATH_OLD
 
 cd ${TOP_BUILD_DIR}
 
-#############################################################
-###          ZEROMQ DEPENDENCY
-#############################################################
+##############################################################
+####          ZEROMQ DEPENDENCY
+##############################################################
 
 echo ""; echo ""; echo ""; echo ""
 
@@ -294,20 +348,22 @@ else
     echo "Expanding ZEROMQ tarball"
     tar xzf ${ZEROMQ_DIR}.tar.gz
     chmod +r -R ${ZEROMQ_DIR}
+    sed -e 's/libzmq_werror="yes"/libzmq_werror="no"/' -i ${ZEROMQ_DIR}/configure
+    sed -i '25 a #include <time.h>' ${ZEROMQ_DIR}/tests/test_connect_delay.cpp 
 fi
 
 cd ${ZEROMQ_DIR}
 
-sed -e 's/libzmq_werror="yes"/libzmq_werror="no"/' -i configure
+
 
 echo ""; echo ""
 echo "Configuring ZMQ"
 ./configure --enable-static --disable-shared --host=arm-linux-androideabi \
     --prefix=$PREFIX LDFLAGS="-L$OUTPUT_DIR/lib \
     -L$ANDROID_STANDALONE_TOOLCHAIN/arm-linux-androideabi/lib/armv7-a \
-    -lgnustl_shared" CPPFLAGS="-fPIC -I$PREFIX/include \
+    -lc++_shared" CPPFLAGS="-fPIC -I$PREFIX/include \
     -I$ANDROID_STANDALONE_TOOLCHAIN/include/c++/4.9/arm-linux-androideabi/armv7-a" \
-    LIBS="-lgcc" --with-libsodium=no
+    LIBS="-lgcc" --with-libsodium=no CXX=clang++ CC=clang
 
 echo ""; echo ""
 echo "Building and installing ZMQ"
@@ -322,9 +378,9 @@ cd ${TOP_BUILD_DIR}
 
 
 
-#############################################################
-###          DOWNLOAD GNURADIO
-#############################################################
+##############################################################
+####          DOWNLOAD GNURADIO
+##############################################################
 
 echo ""; echo ""; echo ""; echo ""
 
@@ -333,24 +389,29 @@ GNURADIO_DIR=gnuradio
 if [ -e "${GNURADIO_DIR}" ];
 then
     echo "GNURADIO file already cloned; skipping"
+    cd gnuradio
 else
     echo "Git cloning GNURADIO"
     git clone git://git.gnuradio.org/gnuradio.git
+    
+    cd gnuradio
+	git checkout android
+	rm cmake/Toolchains/AndroidToolchain.cmake
+	wget -O cmake/Toolchains/AndroidToolchain.cmake https://raw.githubusercontent.com/chenxiaolong/android-cmake/mbp/android.toolchain.cmake
+	#https://raw.githubusercontent.com/urho3d/Urho3D/master/CMake/Toolchains/android.toolchain.cmake
+	# old: https://raw.githubusercontent.com/taka-no-me/android-cmake/master/android.toolchain.cmake
 fi
 
-cd gnuradio
-git checkout android
-rm cmake/Toolchains/AndroidToolchain.cmake
-wget -O cmake/Toolchains/AndroidToolchain.cmake https://raw.githubusercontent.com/taka-no-me/android-cmake/master/android.toolchain.cmake
+
 
 TOOLCHAIN=`pwd`/cmake/Toolchains/AndroidToolchain.cmake
 cd ${TOP_BUILD_DIR}
 
 
 
-#############################################################
-###          LIBUSB DEPENDENCY
-#############################################################
+##############################################################
+####          LIBUSB DEPENDENCY
+##############################################################
 
 echo ""; echo ""; echo ""; echo ""
 
@@ -379,9 +440,9 @@ cp -rLfv ${TOP_BUILD_DIR}/${LIBUSB_DIR}/libusb $PREFIX/include
 cd ${TOP_BUILD_DIR}
 
 
-###########################################################
-#          RTLSDR DEPENDENCY
-###########################################################
+############################################################
+##          RTLSDR DEPENDENCY
+############################################################
 
 echo ""; echo ""; echo ""; echo ""
 
@@ -391,20 +452,24 @@ RTLSDR_VER=android5
 if [ -e "${RTLSDR_DIR}" ];
 then
     echo "RTLSDR file already cloned; skipping"
+    cd ${RTLSDR_DIR}
+	git checkout ${RTLSDR_VER}
+
 else
     echo "Git cloning RTLSDR"
     git clone https://github.com/trondeau/${RTLSDR_DIR}
+    
+    cd ${RTLSDR_DIR}
+	git checkout ${RTLSDR_VER}
+
+	#get rid of set(THREADS_USE_PTHREADS_WIN32 true)
+	sed -i -e '65d;' CMakeLists.txt
+
+	#no tools either
+	sed -i -e '87,134d;' src/CMakeLists.txt
+	sed -i "106i set(INSTALL_TARGETS rtlsdr_shared rtlsdr_static)" src/CMakeLists.txt
 fi
 
-cd ${RTLSDR_DIR}
-git checkout ${RTLSDR_VER}
-
-#get rid of set(THREADS_USE_PTHREADS_WIN32 true)
-sed -i -e '65d;' CMakeLists.txt
-
-#no tools either
-sed -i -e '87,134d;' src/CMakeLists.txt
-sed -i "106i set(INSTALL_TARGETS rtlsdr_shared rtlsdr_static)" src/CMakeLists.txt
 
 echo ""; echo ""
 echo "Configuring RTL-SDR"
@@ -413,7 +478,9 @@ cd build
 
 set +e # expecting this call to cmake to fail
 cmake -Wno-dev \
-       -DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_STL=c++_shared \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
       -DLIBUSB_INCLUDE_DIR=$PREFIX/include/libusb \
@@ -422,7 +489,9 @@ cmake -Wno-dev \
 
 set -e
 cmake -Wno-dev \
-      -DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_STL=c++_shared \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
       -DLIBUSB_INCLUDE_DIR=$PREFIX/include/libusb \
@@ -463,11 +532,41 @@ echo "Configuring UHD"
 mkdir -p build
 cd build
 cmake -Wno-dev \
+	-DBoost_Debug=1 \
+	-DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_STL=c++_shared \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
       -DCMAKE_PREFIX_PATH=$PREFIX \
       -DBOOST_ROOT=$PREFIX \
       -DBoost_DIR=$PREFIX \
+      -DBoost_INCLUDE_DIR=$PREFIX/include \
+      -DBOOST_LIBRARYDIR=$PREFIX/lib \
+      -DBoost_USE_STATIC_LIBS=True \
+	-DBoost_ATOMIC_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_atomic.a \
+	-DBoost_ATOMIC_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_atomic.a \
+	-DBoost_CHRONO_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_chrono.a \
+	-DBoost_CHRONO_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_chrono.a \
+	-DBoost_DATE_TIME_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_date_time.a \
+	-DBoost_DATE_TIME_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_date_time.a \
+	-DBoost_FILESYSTEM_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_filesystem.a \
+	-DBoost_FILESYSTEM_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_filesystem.a \
+	-DBoost_INCLUDE_DIR:PATH=$PREFIX/include \
+	-DBoost_LIBRARY_DIR_DEBUG:PATH=$PREFIX/lib \
+	-DBoost_LIBRARY_DIR_RELEASE:PATH=$PREFIX/lib \
+	-DBoost_PROGRAM_OPTIONS_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_program_options.a \
+	-DBoost_PROGRAM_OPTIONS_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_program_options.a \
+	-DBoost_REGEX_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_regex.a \
+	-DBoost_REGEX_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_regex.a \
+	-DBoost_SERIALIZATION_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_serialization.a \
+	-DBoost_SERIALIZATION_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_serialization.a \
+	-DBoost_SYSTEM_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_system.a \
+	-DBoost_SYSTEM_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_system.a \
+	-DBoost_THREAD_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_thread.a \
+	-DBoost_THREAD_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_thread.a \
+	-DBoost_UNIT_TEST_FRAMEWORK_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_unit_test_framework.a \
+	-DBoost_UNIT_TEST_FRAMEWORK_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_unit_test_framework.a \
       -DLIBUSB_INCLUDE_DIRS=$PREFIX/include/libusb \
       -DLIBUSB_LIBRARIES=$PREFIX/lib/libusb1.0.so \
       -DPYTHON_EXECUTABLE=/usr/bin/python \
@@ -512,6 +611,32 @@ echo "Configuring VOLK"
 mkdir -p build
 cd build
 cmake -Wno-dev \
+	-DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_STL=c++_shared \
+	-DBoost_ATOMIC_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_atomic.a \
+	-DBoost_ATOMIC_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_atomic.a \
+	-DBoost_CHRONO_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_chrono.a \
+	-DBoost_CHRONO_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_chrono.a \
+	-DBoost_DATE_TIME_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_date_time.a \
+	-DBoost_DATE_TIME_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_date_time.a \
+	-DBoost_FILESYSTEM_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_filesystem.a \
+	-DBoost_FILESYSTEM_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_filesystem.a \
+	-DBoost_INCLUDE_DIR:PATH=$PREFIX/include \
+	-DBoost_LIBRARY_DIR_DEBUG:PATH=$PREFIX/lib \
+	-DBoost_LIBRARY_DIR_RELEASE:PATH=$PREFIX/lib \
+	-DBoost_PROGRAM_OPTIONS_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_program_options.a \
+	-DBoost_PROGRAM_OPTIONS_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_program_options.a \
+	-DBoost_REGEX_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_regex.a \
+	-DBoost_REGEX_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_regex.a \
+	-DBoost_SERIALIZATION_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_serialization.a \
+	-DBoost_SERIALIZATION_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_serialization.a \
+	-DBoost_SYSTEM_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_system.a \
+	-DBoost_SYSTEM_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_system.a \
+	-DBoost_THREAD_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_thread.a \
+	-DBoost_THREAD_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_thread.a \
+	-DBoost_UNIT_TEST_FRAMEWORK_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_unit_test_framework.a \
+	-DBoost_UNIT_TEST_FRAMEWORK_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_unit_test_framework.a \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
       -DPYTHON_EXECUTABLE=/usr/bin/python \
@@ -539,16 +664,53 @@ echo ${PATH}
 echo "Configuring GNU Radio"
 mkdir -p build
 cd build
+
+export PKG_CONFIG_PATH=${PREFIX}/lib/pkgconfig
+export PKG_CONFIG_DIR=
+export PKG_CONFIG_LIBDIR=${PREFIX}/lib/pkgconfig
+export PKG_CONFIG_SYSROOT_DIR=${SYS_ROOT}
+
 cmake \
     -Wno-dev \
+    -DCMAKE_BUILD_TYPE=Debug \
+	-DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_STL=c++_shared \
+	-DBoost_ATOMIC_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_atomic.a \
+	-DBoost_ATOMIC_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_atomic.a \
+	-DBoost_CHRONO_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_chrono.a \
+	-DBoost_CHRONO_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_chrono.a \
+	-DBoost_DATE_TIME_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_date_time.a \
+	-DBoost_DATE_TIME_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_date_time.a \
+	-DBoost_FILESYSTEM_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_filesystem.a \
+	-DBoost_FILESYSTEM_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_filesystem.a \
+	-DBoost_INCLUDE_DIR:PATH=$PREFIX/include \
+	-DBoost_LIBRARY_DIR_DEBUG:PATH=$PREFIX/lib \
+	-DBoost_LIBRARY_DIR_RELEASE:PATH=$PREFIX/lib \
+	-DBoost_PROGRAM_OPTIONS_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_program_options.a \
+	-DBoost_PROGRAM_OPTIONS_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_program_options.a \
+	-DBoost_REGEX_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_regex.a \
+	-DBoost_REGEX_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_regex.a \
+	-DBoost_SERIALIZATION_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_serialization.a \
+	-DBoost_SERIALIZATION_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_serialization.a \
+	-DBoost_SYSTEM_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_system.a \
+	-DBoost_SYSTEM_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_system.a \
+	-DBoost_THREAD_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_thread.a \
+	-DBoost_THREAD_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_thread.a \
+	-DBoost_UNIT_TEST_FRAMEWORK_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_unit_test_framework.a \
+	-DBoost_UNIT_TEST_FRAMEWORK_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_unit_test_framework.a \
     -DCMAKE_INSTALL_PREFIX=$PREFIX \
-    -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
     -DCMAKE_PREFIX_PATH=$PREFIX \
+    -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
     -DENABLE_INTERNAL_VOLK=Off \
     -DBOOST_ROOT=$PREFIX \
     -DFFTW3F_INCLUDE_DIRS=$PREFIX/include \
     -DFFTW3F_LIBRARIES=$PREFIX/lib/libfftw3f.a \
     -DFFTW3F_THREADS_LIBRARIES=$PREFIX/lib/libfftw3f_threads.a \
+    -DVOLK_LIBRARIES=${PREFIX}/lib/libvolk.a \
+    -DVOLK_INCLUDE_DIRS=${PREFIX}/include/volk \
+    -DUHD_LIBRARIES=${PREFIX}/lib/libuhd.a \
+    -DUHD_INCLUDE_DIRS=${PREFIX}/include/uhd \
     -DENABLE_DEFAULT=False \
     -DENABLE_GR_LOG=False \
     -DENABLE_VOLK=True \
@@ -565,6 +727,8 @@ cmake \
     -DENABLE_GR_UHD=True \
     -DENABLE_STATIC_LIBS=True \
     -DENABLE_GR_CTRLPORT=True \
+    -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
+    -DPYTHON_EXECUTABLE=/usr/bin/python \
     ../
 
 echo ""; echo ""
@@ -591,15 +755,18 @@ then
 else
     echo "Git cloning gr-grand"
     git clone https://github.com/trondeau/${GRAND_DIR}
+    
+    #no cppunit for now
+	sed -i -e '106d;' ${GRAND_DIR}/CMakeLists.txt
+	sed -i -e '115,117d;' ${GRAND_DIR}/CMakeLists.txt
+	sed -i -e '134d;' ${GRAND_DIR}/CMakeLists.txt
+	sed -i '60s/system/system thread/' ${GRAND_DIR}/CMakeLists.txt
 fi
 
 cd ${GRAND_DIR}
 git checkout ${GRAND_VER}
 
-#no cppunit for now
-sed -i -e '106d;' CMakeLists.txt
-sed -i -e '115,117d;' CMakeLists.txt
-sed -i -e '134d;' CMakeLists.txt
+
 
 echo ""; echo ""
 echo "Configuring GRAND"
@@ -607,10 +774,36 @@ mkdir -p build
 cd build
 PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig
 cmake -Wno-dev \
+	-DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_STL=c++_shared \
+		-DBoost_ATOMIC_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_atomic.a \
+	-DBoost_ATOMIC_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_atomic.a \
+	-DBoost_CHRONO_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_chrono.a \
+	-DBoost_CHRONO_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_chrono.a \
+	-DBoost_DATE_TIME_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_date_time.a \
+	-DBoost_DATE_TIME_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_date_time.a \
+	-DBoost_FILESYSTEM_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_filesystem.a \
+	-DBoost_FILESYSTEM_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_filesystem.a \
+	-DBoost_INCLUDE_DIR:PATH=$PREFIX/include \
+	-DBoost_LIBRARY_DIR_DEBUG:PATH=$PREFIX/lib \
+	-DBoost_LIBRARY_DIR_RELEASE:PATH=$PREFIX/lib \
+	-DBoost_PROGRAM_OPTIONS_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_program_options.a \
+	-DBoost_PROGRAM_OPTIONS_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_program_options.a \
+	-DBoost_REGEX_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_regex.a \
+	-DBoost_REGEX_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_regex.a \
+	-DBoost_SERIALIZATION_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_serialization.a \
+	-DBoost_SERIALIZATION_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_serialization.a \
+	-DBoost_SYSTEM_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_system.a \
+	-DBoost_SYSTEM_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_system.a \
+	-DBoost_THREAD_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_thread.a \
+	-DBoost_THREAD_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_thread.a \
+	-DBoost_UNIT_TEST_FRAMEWORK_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_unit_test_framework.a \
+	-DBoost_UNIT_TEST_FRAMEWORK_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_unit_test_framework.a \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
       -DCMAKE_PREFIX_PATH=$PREFIX \
-      -DPYTHON_EXECUTABLE=/usr/bin/python \
+      -DPYTHON_EXECUTABLE=/usr/bin/python -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config\
       ../
 
 echo ""; echo ""
@@ -652,14 +845,40 @@ export PKG_CONFIG_LIBDIR=$PREFIX/lib/pkgconfig
 export PKG_CONFIG_SYSROOT_DIR=${SYS_ROOT}
 
 cmake -Wno-dev \
-      -DCMAKE_INSTALL_PREFIX=$PREFIX \
-      -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
-      -DCMAKE_PREFIX_PATH=$PREFIX \
-      -DENABLE_UHD=True -DENABLE_FCD=False -DENABLE_RFSPACE=False \
-      -DENABLE_BLADERF=False -DENABLE_HACKRF=False -DENABLE_OSMOSDR=False \
-      -DENABLE_RTL_TCP=False -DENABLE_IQBALANCE=False -DENABLE_RTL=ON\
-      -DBOOST_ROOT=$PREFIX -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
-      ../
+	-DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_STL=c++_shared \
+	-DBoost_ATOMIC_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_atomic.a \
+	-DBoost_ATOMIC_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_atomic.a \
+	-DBoost_CHRONO_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_chrono.a \
+	-DBoost_CHRONO_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_chrono.a \
+	-DBoost_DATE_TIME_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_date_time.a \
+	-DBoost_DATE_TIME_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_date_time.a \
+	-DBoost_FILESYSTEM_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_filesystem.a \
+	-DBoost_FILESYSTEM_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_filesystem.a \
+	-DBoost_INCLUDE_DIR:PATH=$PREFIX/include \
+	-DBoost_LIBRARY_DIR_DEBUG:PATH=$PREFIX/lib \
+	-DBoost_LIBRARY_DIR_RELEASE:PATH=$PREFIX/lib \
+	-DBoost_PROGRAM_OPTIONS_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_program_options.a \
+	-DBoost_PROGRAM_OPTIONS_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_program_options.a \
+	-DBoost_REGEX_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_regex.a \
+	-DBoost_REGEX_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_regex.a \
+	-DBoost_SERIALIZATION_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_serialization.a \
+	-DBoost_SERIALIZATION_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_serialization.a \
+	-DBoost_SYSTEM_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_system.a \
+	-DBoost_SYSTEM_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_system.a \
+	-DBoost_THREAD_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_thread.a \
+	-DBoost_THREAD_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_thread.a \
+	-DBoost_UNIT_TEST_FRAMEWORK_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_unit_test_framework.a \
+	-DBoost_UNIT_TEST_FRAMEWORK_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_unit_test_framework.a \
+	  -DCMAKE_INSTALL_PREFIX=$PREFIX \
+	  -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
+	  -DCMAKE_PREFIX_PATH=$PREFIX \
+	  -DENABLE_UHD=True -DENABLE_FCD=False -DENABLE_RFSPACE=False \
+	  -DENABLE_BLADERF=False -DENABLE_HACKRF=False -DENABLE_OSMOSDR=False \
+	  -DENABLE_RTL_TCP=False -DENABLE_IQBALANCE=False -DENABLE_RTL=ON\
+	  -DBOOST_ROOT=$PREFIX -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
+	  ../
 
 echo ""; echo ""
 echo "Building and installing OSMOSDR"
@@ -701,7 +920,7 @@ mkdir -p build
 cd build
 
 export SYS_ROOT="$ANDROID_STANDALONE_TOOLCHAIN/sysroot"
-export CC="arm-linux-androideabi-gcc --sysroot=$SYS_ROOT"
+export CC="clang --sysroot=$SYS_ROOT"
 export LD="arm-linux-androideabi-ld"
 export AR="arm-linux-androideabi-ar"
 export RANLIB="arm-linux-androideabi-ranlib"
@@ -726,7 +945,6 @@ unset RANLIB
 unset STRIP
 
 cd ${TOP_BUILD_DIR}
-
 
 ############################################################
 ##                   NETTLE DEPENDENCY
@@ -772,7 +990,7 @@ echo "Configuring NETTLE"
 ../configure --host=arm-eabi --build=x86_64-linux --enable-mini-gmp\
   --prefix=$PREFIX \
   LIBS="-lc -lgcc -march=armv7-a -mfloat-abi=softfp -mfpu=neon" \
-  CC="arm-linux-androideabi-gcc -march=armv7-a -mfloat-abi=softfp -mfpu=neon"
+  CC="clang -march=armv7-a -mfloat-abi=softfp -mfpu=neon"
 
 echo "\n\nBuilding and installing NETTLE"
 make -s -j${PARALLEL}
@@ -821,7 +1039,7 @@ mkdir -p build
 cd build
 
 export SYS_ROOT="$ANDROID_STANDALONE_TOOLCHAIN/sysroot"
-export CC="arm-linux-androideabi-gcc --sysroot=$SYS_ROOT"
+export CC="clang --sysroot=$SYS_ROOT"
 export LD="arm-linux-androideabi-ld"
 export AR="arm-linux-androideabi-ar"
 export RANLIB="arm-linux-androideabi-ranlib"
@@ -861,127 +1079,7 @@ cd ${TOP_BUILD_DIR}
 
 ###########################################################
 #          OPENBLAS DEPENDENCY
-###########################################################
-
-echo ""; echo ""; echo ""; echo ""
-
-OPENBLAS_DIR=OpenBLAS
-OPENBLAS_VER=develop
-
-if [ -e "${OPENBLAS_DIR}" ];
-then
-    echo "OPENBLAS file already cloned; skipping"
-else
-    echo "Git cloning OPENBLAS"
-    git clone https://github.com/xianyi/${OPENBLAS_DIR}.git
-fi
-
-cd ${OPENBLAS_DIR}
-git checkout ${OPENBLAS_VER}
-
-echo ""; echo ""
-echo "Configuring OPENBLAS"
-echo ""; echo ""
-echo "Building and installing OPENBLAS"
-
-### armv5 instead of v7 for softfp?
-make TARGET=ARMV5 HOSTCC=gcc CC=arm-linux-androideabi-gcc NOFORTRAN=1
-#make -s -j${PARALLEL}
-make -s PREFIX=${PREFIX} install
-
-cd ${TOP_BUILD_DIR}
-
-
-############################################################
-##                   CLAPACK DEPENDENCY
-############################################################
-
-echo ""; echo ""; echo ""; echo ""
-
-CLAPACK_VER=3.2.1
-CLAPACK_DIR=clapack-${CLAPACK_VER}
-CLAPACK_URL="http://www.netlib.org/clapack/clapack-3.2.1.tgz"
-
-if [ -e "${CLAPACK_DIR}.tgz" ];
-then
-    echo "CLAPACK file already downloaded; skipping"
-else
-    echo "Downloading CLAPACK tarball"
-    wget ${CLAPACK_URL}
-fi
-
-if [ -d ${CLAPACK_DIR} ];
-then
-    echo "CLAPACK directory expanded; skipping"
-else
-    echo "Expanding CLAPACK tarball"
-    tar xzf ${CLAPACK_DIR}.tgz
-    mv CLAPACK-3.2.1 clapack-3.2.1
-    chmod +r -R ${CLAPACK_DIR}
-fi
-
-cd ${CLAPACK_DIR}
-
-
-mv make.inc.example make.inc
-sed -i 's/gcc/arm-linux-androideabi-gcc/g' make.inc
-#sed -i '31s/lapack_install//' Makefile
-sed -i -e '19,20d' Makefile
-sed -i "19i TAB( cd INSTALL; \$(MAKE) )" Makefile
-sed -i "19s/TAB/\t/" Makefile
-
-sed -i -e '12d' F2CLIBS/libf2c/sysdep1.h0
-sed -i -e '12s/__off64_t/off64_t/' F2CLIBS/libf2c/sysdep1.h0
-
-sed -i '23s/ld/arm-linux-androideabi-ld/'  F2CLIBS/libf2c/Makefile
-sed -i '32s/uninit.o//'  F2CLIBS/libf2c/Makefile
-sed -i '75s/ar/arm-linux-androideabi-ar/'  F2CLIBS/libf2c/Makefile
-sed -i -e '185,188d' F2CLIBS/libf2c/Makefile
-touch F2CLIBS/libf2c/arith.h
-
-
-
-cp $PREFIX/lib/libopenblas_armv5p-r0.2.19.dev.a blas_LINUX.a
-
-
-sed -i '23s/__off64_t/off64_t/'  F2CLIBS/libf2c/sysdep1.h0
-
-export SYS_ROOT="$ANDROID_STANDALONE_TOOLCHAIN/sysroot"
-export CC="arm-linux-androideabi-gcc --sysroot=$SYS_ROOT"
-export LD="arm-linux-androideabi-ld"
-export AR="arm-linux-androideabi-ar"
-export RANLIB="arm-linux-androideabi-ranlib"
-export STRIP="arm-linux-androideabi-strip"
-
-#PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig
-export PKG_CONFIG_DIR=
-export PKG_CONFIG_LIBDIR=$PREFIX/lib/pkgconfig
-export PKG_CONFIG_SYSROOT_DIR=${SYS_ROOT}
-export PATH=${PATH}
-
-echo ""; echo ""
-echo "Configuring CLAPACK"
-
-echo "\n\nBuilding and installing CLAPACK"
-make f2clib -s -j${PARALLEL}
-make lapacklib -s -j${PARALLEL}
-#make -s install
-
-
-cp lapack_LINUX.a $PREFIX/lib/
-
-unset SYS_ROOT
-unset CC
-unset LD
-unset AR
-unset RANLIB
-unset STRIP
-
-cd ${TOP_BUILD_DIR}
-
-#############################################################
-###                   OPENBLAS DEPENDENCY
-#############################################################
+#########################################################
 
 echo ""; echo ""; echo ""; echo ""
 
@@ -1011,7 +1109,7 @@ cd ${OPENBLAS_DIR}
 
 
 export SYS_ROOT="$ANDROID_STANDALONE_TOOLCHAIN/sysroot"
-export CC="arm-linux-androideabi-gcc --sysroot=$SYS_ROOT"
+export CC="clang  --sysroot=$SYS_ROOT"
 export LD="arm-linux-androideabi-ld"
 export AR="arm-linux-androideabi-ar"
 export RANLIB="arm-linux-androideabi-ranlib"
@@ -1026,7 +1124,7 @@ echo ""; echo ""
 
 echo "\n\nBuilding and installing OPENBLAS"
 #armv5 instead of v7 because of no softfp support
-make TARGET=ARMV5 HOSTCC=gcc CC=arm-linux-androideabi-gcc NOFORTRAN=1 -j${PARALLEL}
+make TARGET=ARMV5 HOSTCC=gcc CC=clang NOFORTRAN=1 NO_LAPACK=1 -j${PARALLEL}
 make PREFIX=${PREFIX} install
 
 
@@ -1038,6 +1136,105 @@ unset RANLIB
 unset STRIP
 
 cd ${TOP_BUILD_DIR}
+
+############################################################
+##                   CLAPACK DEPENDENCY
+############################################################
+
+echo ""; echo ""; echo ""; echo ""
+
+CLAPACK_VER=3.2.1
+CLAPACK_DIR=clapack-${CLAPACK_VER}
+CLAPACK_URL="http://www.netlib.org/clapack/clapack-3.2.1.tgz"
+
+if [ -e "${CLAPACK_DIR}.tgz" ];
+then
+    echo "CLAPACK file already downloaded; skipping"
+else
+    echo "Downloading CLAPACK tarball"
+    wget ${CLAPACK_URL}
+fi
+
+if [ -d ${CLAPACK_DIR} ];
+then
+    echo "CLAPACK directory expanded; skipping"
+    cd ${CLAPACK_DIR}
+
+else
+    echo "Expanding CLAPACK tarball"
+    tar xzf ${CLAPACK_DIR}.tgz
+    mv CLAPACK-3.2.1 clapack-3.2.1
+    chmod +r -R ${CLAPACK_DIR}
+    
+    cd ${CLAPACK_DIR}
+
+
+	mv make.inc.example make.inc
+	sed -i 's/gcc/clang/g' make.inc
+	#sed -i '31s/lapack_install//' Makefile
+	sed -i -e '19,20d' Makefile
+	sed -i "19i TAB( cd INSTALL; \$(MAKE) )" Makefile
+	sed -i "19s/TAB/\t/" Makefile
+
+	sed -i -e '12d' F2CLIBS/libf2c/sysdep1.h0
+	sed -i -e '12s/__off64_t/off64_t/' F2CLIBS/libf2c/sysdep1.h0
+
+	sed -i '23s/ld/arm-linux-androideabi-ld/'  F2CLIBS/libf2c/Makefile
+	sed -i '32s/uninit.o//'  F2CLIBS/libf2c/Makefile
+	sed -i '75s/ar/arm-linux-androideabi-ar/'  F2CLIBS/libf2c/Makefile
+	sed -i -e '185,188d' F2CLIBS/libf2c/Makefile
+	touch F2CLIBS/libf2c/arith.h
+	
+	### not part of openblas? see github issue
+	sed -i -e '235,243d;' BLAS/WRAP/cblaswr.c
+	sed -i -e '216,224d;' BLAS/WRAP/cblaswr.c
+
+
+fi
+
+
+cp $PREFIX/lib/libopenblas_armv5p-r0.2.18.a blas_LINUX.a
+
+
+sed -i '23s/__off64_t/off64_t/'  F2CLIBS/libf2c/sysdep1.h0
+
+export SYS_ROOT="$ANDROID_STANDALONE_TOOLCHAIN/sysroot"
+export CC="clang --sysroot=$SYS_ROOT"
+export LD="arm-linux-androideabi-ld"
+export AR="arm-linux-androideabi-ar"
+export RANLIB="arm-linux-androideabi-ranlib"
+export STRIP="arm-linux-androideabi-strip"
+
+#PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig
+export PKG_CONFIG_DIR=
+export PKG_CONFIG_LIBDIR=$PREFIX/lib/pkgconfig
+export PKG_CONFIG_SYSROOT_DIR=${SYS_ROOT}
+export PATH=${PATH}
+
+echo ""; echo ""
+echo "Configuring CLAPACK"
+
+echo "\n\nBuilding and installing CLAPACK"
+make f2clib -s -j${PARALLEL}
+make lapacklib -s -j${PARALLEL}
+make cblaswrap -s -j${PARALLEL}
+#make -s install
+
+##############################################
+# http://stackoverflow.com/questions/3821916/how-to-merge-two-ar-static-libraries-into-one
+# merge the archives to make linking easier
+##### thin -a file which references the other two archives
+#######arm-linux-androideabi-ar -rcT lapack_LINUX_wrap.a lapack_LINUX.a libcblaswr.a
+arm-linux-androideabi-ar cqT tmp.a lapack_LINUX.a libcblaswr.a F2CLIBS/libf2c.a blas_LINUX.a && echo -e 'create lapack_LINUX_wrap.a\naddlib tmp.a\nsave\nend' | arm-linux-androideabi-ar -M
+cp lapack_LINUX_wrap.a $PREFIX/lib/
+
+unset SYS_ROOT
+unset CC
+unset LD
+unset AR
+unset RANLIB
+unset STRIP
+
 
 
 ############################################################
@@ -1073,19 +1270,23 @@ echo ""; echo ""
 echo "Configuring ARMADILLO"
 mkdir -p build
 cd build
-#PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig
+PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig
 export PKG_CONFIG_DIR=
 export PKG_CONFIG_LIBDIR=$PREFIX/lib/pkgconfig
 export PKG_CONFIG_SYSROOT_DIR=${SYS_ROOT}
 
 cmake -Wno-dev \
+	-DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_STL=c++_shared \
+	-DLAPACK_LIBRARY=$PREFIX/lib/lapack_LINUX_wrap.a \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
       -DCMAKE_PREFIX_PATH=$PREFIX \
       -DBOOST_ROOT=$PREFIX -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
       ../
 
-sed -i 's/CMAKE_C_COMPILER/arm-linux-androideabi-gcc/g' CMakeFiles/armadillo.dir/link.txt
+sed -i 's/CMAKE_C_COMPILER/clang/g' CMakeFiles/armadillo.dir/link.txt
 echo ""; echo ""
 echo "Building and installing ARMADILLO"
 make -s -j${PARALLEL}
@@ -1132,6 +1333,9 @@ export PKG_CONFIG_LIBDIR=$PREFIX/lib/pkgconfig
 export PKG_CONFIG_SYSROOT_DIR=${SYS_ROOT}
 
 cmake -Wno-dev \
+	-DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_STL=c++_shared \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
       -DCMAKE_PREFIX_PATH=$PREFIX \
@@ -1172,6 +1376,9 @@ sed -i -e '457,545d' CMakeLists.txt
 mkdir -p build
 cd build
 cmake -Wno-dev \
+	-DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_STL=c++_shared \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
       -DCMAKE_PREFIX_PATH=$PREFIX \
@@ -1185,93 +1392,109 @@ make -s install
 
 cd ${TOP_BUILD_DIR}
 
-################################
-####          GNSS-SDR-VOLK
-################################
+##############################
+##          GNSS-SDR-VOLK
+##############################
 
-#echo ""; echo ""; echo ""; echo ""
+echo ""; echo ""; echo ""; echo ""
 
-#GNSSSDR_DIR=gnss-sdr
-##OSMOSDR_VER=android5
+GNSSSDR_DIR=gnss-sdr
+#OSMOSDR_VER=android5
 
-#if [ -e "${GNSSSDR_DIR}" ];
-#then
-    #echo "gnss-sdr already cloned; skipping"
-#else
-    #echo "Git cloning gnss-sdr-volk"
-    #git clone git://github.com/gnss-sdr/gnss-sdr
-#fi
+if [ -e "${GNSSSDR_DIR}" ];
+then
+    echo "gnss-sdr already cloned; skipping"
+else
+    echo "Git cloning gnss-sdr-volk"
+    git clone git://github.com/gnss-sdr/gnss-sdr
+	cd ${GNSSSDR_DIR}
+	patch -p1 < ../gnss-sdr.diff
+	cd ${TOP_BUILD_DIR}
+fi
 
-#cd ${GNSSSDR_DIR}/src/algorithms/libs/volk_gnsssdr_module/volk_gnsssdr/
+cd ${GNSSSDR_DIR}/src/algorithms/libs/volk_gnsssdr_module/volk_gnsssdr/
 
-##git checkout ${OSMOSDR_VER}
+echo ""; echo ""
+echo "Configuring gnss-sdr-volk"
+mkdir -p build
+cd build
 
-#echo ""; echo ""
-#echo "Configuring gnss-sdr-volk"
-#mkdir -p build
-#cd build
+cmake -Wno-dev \
+	-DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_STL=c++_shared \
+      -DCMAKE_INSTALL_PREFIX=$PREFIX \
+      -DCMAKE_PREFIX_PATH=$PREFIX \
+      -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
+      -DGIT_EXECUTABLE=/usr/bin/git \
+      -DENABLE_OSMOSDR=ON -DBOOST_ROOT=$PREFIX -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
+      -DGLOG_INCLUDE_DIR=$PREFIX\include\glog -DGLOG_LIBRARIES=$PREFIX\lib\libglog.a \
+      -DGLOG_ROOT=$PREFIX -DGFlags_ROOT_DIR=$PREFIX \
+      -DPYTHON_EXECUTABLE=/usr/bin/python \
+      ../
+
+sed -i 's/-lc++//g' apps/CMakeFiles/volk_gnsssdr_profile.dir/link.txt
+sed -i 's/-lc++//g' apps/CMakeFiles/volk_gnsssdr-config-info.dir/link.txt
+echo ""; echo ""
+echo "Building and installing gnss-sdr-volk"
+make -s -j${PARALLEL}
+make -s install
+
+cd ${TOP_BUILD_DIR}
+
+##############################
+##          GNSS-SDR
+##############################
+
+echo ""; echo ""; echo ""; echo ""
+
+GNSSSDR_DIR=gnss-sdr
+#OSMOSDR_VER=android5
+
+if [ -e "${GNSSSDR_DIR}" ];
+then
+    echo "gnss-sdr file already cloned; skipping"
+else
+    echo "Git cloning gnss-sdr"
+    git clone git://github.com/gnss-sdr/gnss-sdr
+    sed -i 's/-lc++//g'  ${GNSSSDR_DIR}/src/tests/CMakeLists.txt
+fi
+
+cd ${GNSSSDR_DIR}
+#git checkout ${OSMOSDR_VER}
+
+echo ""; echo ""
+echo "Configuring gnss-sdr"
+mkdir -p build
+cd build
 
 
-#cmake -Wno-dev \
-      #-DCMAKE_INSTALL_PREFIX=$PREFIX \
-      #-DCMAKE_PREFIX_PATH=$PREFIX \
-      #-DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
-      #-DGIT_EXECUTABLE=/usr/bin/git \
-      #-DENABLE_OSMOSDR=ON -DBOOST_ROOT=$PREFIX -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
-      #-DGLOG_INCLUDE_DIR=$PREFIX\include\glog -DGLOG_LIBRARIES=$PREFIX\lib\libglog.a \
-      #-DGLOG_ROOT=$PREFIX -DGFlags_ROOT_DIR=$PREFIX \
-      #-DPYTHON_EXECUTABLE=/usr/bin/python \
-      #../
+cmake -Wno-dev \
+		-DCMAKE_BUILD_TYPE=Debug \
+	-DANDROID_NATIVE_API_LEVEL=21 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_STL=c++_shared \
+      -DCMAKE_INSTALL_PREFIX=$PREFIX \
+      -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
+      -DCMAKE_PREFIX_PATH=$PREFIX \
+      -DGIT_EXECUTABLE=/usr/bin/git \
+      -DENABLE_OSMOSDR=ON -DBOOST_ROOT=$PREFIX -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
+      -DGLOG_INCLUDE_DIR=$PREFIX/include/glog -DGLOG_LIBRARIES=$PREFIX/lib/libglog.a \
+      -DGLOG_ROOT=$PREFIX -DGFlags_ROOT_DIR=$PREFIX \
+      -DGTEST_DIR=/opt/android-ndk-r11c/sources/third_party/googletest/googletest/ \
+      ../
 
-#echo ""; echo ""
-#echo "Building and installing gnss-sdr-volk"
-#make -s -j${PARALLEL}
-#make -s install
-
-#cd ${TOP_BUILD_DIR}
-
-################################
-####          GNSS-SDR
-################################
-
-##echo ""; echo ""; echo ""; echo ""
-
-##GNSSSDR_DIR=gnss-sdr
-###OSMOSDR_VER=android5
-
-##if [ -e "${GNSSSDR_DIR}" ];
-##then
-    ##echo "gnss-sdr file already cloned; skipping"
-##else
-    ##echo "Git cloning gnss-sdr"
-    ##git clone git://github.com/gnss-sdr/gnss-sdr
-##fi
-
-##cd ${GNSSSDR_DIR}
-###git checkout ${OSMOSDR_VER}
-
-##echo ""; echo ""
-##echo "Configuring gnss-sdr"
-##mkdir -p build
-##cd build
+#dirty FIXME
+find . -name link.txt | xargs sed -i 's/-lc++//g'
 
 
-##cmake -Wno-dev \
-      ##-DCMAKE_INSTALL_PREFIX=$PREFIX \
-      ##-DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
-      ##-DCMAKE_PREFIX_PATH=$PREFIX \
-      ##-DGIT_EXECUTABLE=/usr/bin/git \
-      ##-DENABLE_OSMOSDR=ON -DBOOST_ROOT=$PREFIX -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
-      ##-DGLOG_INCLUDE_DIR=$PREFIX\include\glog -DGLOG_LIBRARIES=$PREFIX\lib\libglog.a \
-      ##-DGLOG_ROOT=$PREFIX -DGFlags_ROOT_DIR=$PREFIX \
-      ##../
+echo ""; echo ""
+echo "Building and installing gnss-sdr"
+make -s -j${PARALLEL} V=1
+make -s install
 
-##echo ""; echo ""
-##echo "Building and installing gnss-sdr"
-##make -s -j${PARALLEL}
-##make -s install
+cd ${TOP_BUILD_DIR}
 
-##cd ${TOP_BUILD_DIR}
 
 
 #############################################################
