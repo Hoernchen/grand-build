@@ -67,7 +67,7 @@ rm -rf ./qtbase
 git clone https://github.com/Hoernchen/qtbase.git
 ./configure -debug -no-pch -opensource -confirm-license -xplatform android-clang -nomake tools -nomake tests -nomake examples -android-ndk /opt/android-ndk-r12b -android-sdk /opt/android-sdk -android-ndk-host linux-x86_64 -android-toolchain-version 4.9 -skip qttranslations -skip qtwebkit -skip qtserialport -skip qtwebkit-examples -skip qtconnectivity -skip qtwebkit -skip qtmultimedia -skip qt3d -skip qtenginio -skip qtwebsockets -skip qtwebview -skip qtquick1 -skip qtgamepad -skip qtscript -skip qtcharts -skip qtpurchasing -skip qtscxml -skip qtwebchannel -skip qtdatavis3d -no-warnings-are-errors -prefix /opt/qt-android -android-ndk-platform android-21 && make
 ~~~~~~ 
-Mind the paths to the sdk and ndk. Some parts (qttools) might require headers from the ndk not present in the used api levels, the easiest fix is to copy those headers from other api levels.
+Mind the paths to the sdk and ndk. Some parts (qttools) might require headers from the ndk not present in the used api levels, the easiest fix is to copy those headers from other api levels. If the build breaks try to checkout out the dev branches, some submodules are somewhat unstable.
 Refer to the qt documentation to set up this new qt version as a kit so it can be used to build the gui app for Android, it might be neccessary to manually set the mkspec to "android-clang".
 
 Unfortuantely this qt version will then suffer from all kinds of subtile bugs, i.e. the map element which could be used to plot the positions currently looks like this:
