@@ -28,8 +28,8 @@
 
 if [ -z "$PREFIX" ];
 then
-    echo "PREFIX not set; defaulting to /opt/grandroid"
-    PREFIX=/gnss/grandroid
+    echo "PREFIX not set;"
+    exit
 fi
 
 if [ -z "$ANDROID_SDK" ];
@@ -108,14 +108,47 @@ ${ANDROID_NDK}/build/tools/make-standalone-toolchain.sh --toolchain=arm-linux-an
 
 #unset ANDROID_NDK --standalone toolchain?
 
-## fix linking issues: shared/static prefix
-## the standalone toolchain has a renamed runtime, but the ndk doesn't
-## -> better safe than sorry
-mkdir -p $PREFIX/lib/
+## fix linking issues: shared/static prefix, -stdlib=
+## the standalone toolchain has a renamed runtime, but the ndk doesn't -> better safe than sorry
+## also libm fuckup...
+mkdir -p $PREFIX/lib
+mkdir -p $PREFIX/libs/
+cd $PREFIX/libs/
+ln -sfn ../lib armeabi-v7a
+cd $TOP_BUILD_DIR
 cd $PREFIX/lib
 cp -a ${ANDROID_NDK}/sources/cxx-stl/llvm-libc++/libs/armeabi-v7a/libc++_shared.so .
-ln -s libc++_shared.so libc++.so || true
+cp -a ${ANDROID_NDK}/sources/cxx-stl/llvm-libc++/libs/armeabi-v7a/libc++_shared.so libc++.so
+cp -a ${ANDROID_NDK}/platforms/android-23/arch-arm/usr/lib/libm.so .
+#ln -s libc++_shared.so libc++.so || true
 cd $TOP_BUILD_DIR
+
+
+
+TOOLCHAIN=`pwd`/AndroidToolchain.cmake
+
+#. scripts/boost.sh
+#. scripts/fftw.sh
+#. scripts/openssl.sh
+#.  scripts/zmq.sh
+#.  scripts/gnuradio-download.sh
+#.  scripts/libusb.sh
+#.  scripts/rtlsdr.sh
+#.  scripts/uhd.sh
+#.  scripts/volk.sh
+#.  scripts/gnuradio.sh
+#.  scripts/gr-grand.sh
+#.  scripts/gr-osmosdr.sh
+#.  scripts/gmp.sh
+#.  scripts/nettle.sh
+#. scripts/gnutls.sh
+#. scripts/openblas.sh
+#. scripts/clapack.sh
+#. scripts/armadillo.sh
+#. scripts/gflags.sh
+#. scripts/glog.sh
+#. scripts/gnsssdr_volk.sh
+#. scripts/gnss-sdr.sh
 
 #############################################################
 ###                   BOOST DEPENDENCY
@@ -258,8 +291,6 @@ unset STRIP
 
 cd ${TOP_BUILD_DIR}
 
-
-
 #############################################################
 ###            OpenSSL (libcrypto) DEPENDENCY
 #############################################################
@@ -323,6 +354,7 @@ PATH=$PATH_OLD
 
 cd ${TOP_BUILD_DIR}
 
+
 ##############################################################
 ####          ZEROMQ DEPENDENCY
 ##############################################################
@@ -361,6 +393,7 @@ echo "Configuring ZMQ"
 ./configure --enable-static --disable-shared --host=arm-linux-androideabi \
     --prefix=$PREFIX LDFLAGS="-L$OUTPUT_DIR/lib \
     -L$ANDROID_STANDALONE_TOOLCHAIN/arm-linux-androideabi/lib/armv7-a \
+    -L${ANDROID_NDK}/sources/cxx-stl/llvm-libc++/libs/armeabi-v7a \
     -lc++_shared" CPPFLAGS="-fPIC -I$PREFIX/include \
     -I$ANDROID_STANDALONE_TOOLCHAIN/include/c++/4.9/arm-linux-androideabi/armv7-a" \
     LIBS="-lgcc" --with-libsodium=no CXX=clang++ CC=clang
@@ -375,8 +408,6 @@ echo "Getting C++ Header for ZMQ"
 wget -O $PREFIX/include/zmq.hpp https://raw.githubusercontent.com/zeromq/cppzmq/master/zmq.hpp
 
 cd ${TOP_BUILD_DIR}
-
-
 
 ##############################################################
 ####          DOWNLOAD GNURADIO
@@ -397,16 +428,17 @@ else
     cd gnuradio
 	git checkout android
 	rm cmake/Toolchains/AndroidToolchain.cmake
-	wget -O cmake/Toolchains/AndroidToolchain.cmake https://raw.githubusercontent.com/chenxiaolong/android-cmake/mbp/android.toolchain.cmake
+	#wget -O cmake/Toolchains/AndroidToolchain.cmake https://raw.githubusercontent.com/chenxiaolong/android-cmake/mbp/android.toolchain.cmake
 	#https://raw.githubusercontent.com/urho3d/Urho3D/master/CMake/Toolchains/android.toolchain.cmake
 	# old: https://raw.githubusercontent.com/taka-no-me/android-cmake/master/android.toolchain.cmake
 fi
 
 
 
-TOOLCHAIN=`pwd`/cmake/Toolchains/AndroidToolchain.cmake
+#TOOLCHAIN=`pwd`/cmake/Toolchains/AndroidToolchain.cmake
 cd ${TOP_BUILD_DIR}
 
+#TOOLCHAIN=`pwd`/AndroidToolchain.cmake
 
 
 ##############################################################
@@ -415,7 +447,7 @@ cd ${TOP_BUILD_DIR}
 
 echo ""; echo ""; echo ""; echo ""
 
-LIBUSB_DIR=libusb
+LIBUSB_DIR=libusb-android
 LIBUSB_VER=v1.0.19-and5
 
 if [ -e "${LIBUSB_DIR}" ];
@@ -423,22 +455,25 @@ then
     echo "LIBUSB file already cloned; skipping"
 else
     echo "Git cloning LIBUSB"
-    git clone https://github.com/trondeau/${LIBUSB_DIR}
+    git clone https://github.com/Hoernchen/${LIBUSB_DIR}
 fi
 
 cd ${LIBUSB_DIR}
 git checkout ${LIBUSB_VER}
 
-echo "Building libUSB via ndk-build"
-cd android/jni
-ndk-build
+#broken due to linking with stdlibc++
+#echo "Building libUSB via ndk-build"
+#cd android/jni
+#ndk-build APP_STL=c++_shared NDK_TOOLCHAIN_VERSION=clang
+
+${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang -gcc-toolchain ${ANDROID_NDK}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64 -fpic -ffunction-sections -funwind-tables -fstack-protector-strong -Wno-invalid-command-line-argument -Wno-unused-command-line-argument -no-canonical-prefixes -fno-integrated-as -g -target armv7-none-linux-androideabi -march=armv7-a -mfloat-abi=softfp -mfpu=vfpv3-d16 -mthumb -Os -DNDEBUG  -I/$PWD/android/jni/.. -I/$PWD/android/jni/../../libusb -I/$PWD/android/jni/../../libusb/os -I/$PWD/android/jni -DANDROID  -Wa,--noexecstack -Wformat -Werror=format-security    -isystem ${ANDROID_NDK}/platforms/android-9/arch-arm/usr/include -Wl,-soname,libusb1.0.so -shared --sysroot=${ANDROID_NDK}/platforms/android-9/arch-arm -lgcc  -no-canonical-prefixes -target armv7-none-linux-androideabi -Wl,--fix-cortex-a8  -Wl,--build-id -Wl,--no-undefined -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--warn-shared-textrel -Wl,--fatal-warnings -llog  -L${ANDROID_NDK}/platforms/android-9/arch-arm/usr/lib -llog -lc -lm libusb/core.c libusb/descriptor.c libusb/hotplug.c libusb/io.c libusb/sync.c libusb/strerror.c libusb/os/linux_usbfs.c libusb/os/poll_posix.c libusb/os/threads_posix.c libusb/os/linux_netlink.c -o libusb1.0.so
+${ANDROID_NDK}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-strip --strip-unneeded  libusb1.0.so
 
 echo "Copying libUSB files to $PREFIX"
-cp -Lfv ${TOP_BUILD_DIR}/${LIBUSB_DIR}/android/libs/armeabi-v7a/libusb1.0.so $PREFIX/lib
+cp -Lfv ${TOP_BUILD_DIR}/${LIBUSB_DIR}/libusb1.0.so $PREFIX/lib
 cp -rLfv ${TOP_BUILD_DIR}/${LIBUSB_DIR}/libusb $PREFIX/include
 
 cd ${TOP_BUILD_DIR}
-
 
 ############################################################
 ##          RTLSDR DEPENDENCY
@@ -447,27 +482,30 @@ cd ${TOP_BUILD_DIR}
 echo ""; echo ""; echo ""; echo ""
 
 RTLSDR_DIR=rtl-sdr
-RTLSDR_VER=android5
+#RTLSDR_VER=android5
 
 if [ -e "${RTLSDR_DIR}" ];
 then
     echo "RTLSDR file already cloned; skipping"
     cd ${RTLSDR_DIR}
-	git checkout ${RTLSDR_VER}
+	#git checkout ${RTLSDR_VER}
 
 else
     echo "Git cloning RTLSDR"
-    git clone https://github.com/trondeau/${RTLSDR_DIR}
+#    git clone https://github.com/trondeau/${RTLSDR_DIR}
+#	git clone git://git.osmocom.org/rtl-sdr
+ 
+	git clone  https://github.com/Hoernchen/rtl-sdr.git
     
     cd ${RTLSDR_DIR}
-	git checkout ${RTLSDR_VER}
+#	git checkout ${RTLSDR_VER}
 
 	#get rid of set(THREADS_USE_PTHREADS_WIN32 true)
-	sed -i -e '65d;' CMakeLists.txt
+#	sed -i -e '65d;' CMakeLists.txt
 
 	#no tools either
-	sed -i -e '87,134d;' src/CMakeLists.txt
-	sed -i "106i set(INSTALL_TARGETS rtlsdr_shared rtlsdr_static)" src/CMakeLists.txt
+#	sed -i -e '87,134d;' src/CMakeLists.txt
+#	sed -i "106i set(INSTALL_TARGETS rtlsdr_shared rtlsdr_static)" src/CMakeLists.txt
 fi
 
 
@@ -479,7 +517,7 @@ cd build
 set +e # expecting this call to cmake to fail
 cmake -Wno-dev \
 	-DANDROID_NATIVE_API_LEVEL=21 \
-	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang \
 	-DANDROID_STL=c++_shared \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
@@ -490,7 +528,7 @@ cmake -Wno-dev \
 set -e
 cmake -Wno-dev \
 	-DANDROID_NATIVE_API_LEVEL=21 \
-	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang \
 	-DANDROID_STL=c++_shared \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
@@ -504,8 +542,6 @@ make -s -j${PARALLEL}
 make -s install
 
 cd ${TOP_BUILD_DIR}
-
-
 
 ###########################################################
 #          UHD DEPENDENCY
@@ -521,7 +557,7 @@ then
     echo "UHD file already cloned; skipping"
 else
     echo "Git cloning UHD"
-    git clone https://github.com/trondeau/${UHD_DIR}
+    git clone https://github.com/Hoernchen/${UHD_DIR}
 fi
 
 cd ${UHD_DIR}/host
@@ -531,10 +567,10 @@ echo ""; echo ""
 echo "Configuring UHD"
 mkdir -p build
 cd build
+#	-DBoost_Debug=1
 cmake -Wno-dev \
-	-DBoost_Debug=1 \
 	-DANDROID_NATIVE_API_LEVEL=21 \
-	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang \
 	-DANDROID_STL=c++_shared \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
@@ -583,9 +619,6 @@ make -s install
 
 cd ${TOP_BUILD_DIR}
 
-
-
-
 ###########################################################
 #          VOLK DEPENDENCY
 ###########################################################
@@ -600,7 +633,7 @@ then
     echo "VOLK file already cloned; skipping"
 else
     echo "Git cloning VOLK"
-    git clone https://github.com/trondeau/${VOLK_DIR}
+    git clone https://github.com/Hoernchen/${VOLK_DIR}
 fi
 
 cd ${VOLK_DIR}
@@ -611,8 +644,10 @@ echo "Configuring VOLK"
 mkdir -p build
 cd build
 cmake -Wno-dev \
-	-DANDROID_NATIVE_API_LEVEL=21 \
-	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+    -DCMAKE_BUILD_TYPE=Release \
+	-DANDROID=1 \
+	-DANDROID_NATIVE_API_LEVEL=23 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang \
 	-DANDROID_STL=c++_shared \
 	-DBoost_ATOMIC_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_atomic.a \
 	-DBoost_ATOMIC_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_atomic.a \
@@ -640,9 +675,9 @@ cmake -Wno-dev \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
       -DPYTHON_EXECUTABLE=/usr/bin/python \
-      -DENABLE_STATIC_LIBS=True \
       ../
 
+#      -DENABLE_STATIC_LIBS=True
 echo ""; echo ""
 echo "Building and installing VOLK"
 make -s -j${PARALLEL}
@@ -650,14 +685,11 @@ make -s install
 
 cd ${TOP_BUILD_DIR}
 
-
-
-
 ###########################################################
 #          BUILDING GNURADIO
 ###########################################################
 
-cd ${GNURADIO_DIR}
+cd gnuradio
 
 echo ""; echo ""
 echo ${PATH}
@@ -671,10 +703,10 @@ export PKG_CONFIG_LIBDIR=${PREFIX}/lib/pkgconfig
 export PKG_CONFIG_SYSROOT_DIR=${SYS_ROOT}
 
 cmake \
+    -DCMAKE_BUILD_TYPE=Release \
     -Wno-dev \
-    -DCMAKE_BUILD_TYPE=Debug \
-	-DANDROID_NATIVE_API_LEVEL=21 \
-	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_NATIVE_API_LEVEL=23 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang \
 	-DANDROID_STL=c++_shared \
 	-DBoost_ATOMIC_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_atomic.a \
 	-DBoost_ATOMIC_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_atomic.a \
@@ -707,9 +739,9 @@ cmake \
     -DFFTW3F_INCLUDE_DIRS=$PREFIX/include \
     -DFFTW3F_LIBRARIES=$PREFIX/lib/libfftw3f.a \
     -DFFTW3F_THREADS_LIBRARIES=$PREFIX/lib/libfftw3f_threads.a \
-    -DVOLK_LIBRARIES=${PREFIX}/lib/libvolk.a \
+    -DVOLK_LIBRARIES=${PREFIX}/lib/libvolk.so \
     -DVOLK_INCLUDE_DIRS=${PREFIX}/include/volk \
-    -DUHD_LIBRARIES=${PREFIX}/lib/libuhd.a \
+    -DUHD_LIBRARIES=${PREFIX}/lib/libuhd.so \
     -DUHD_INCLUDE_DIRS=${PREFIX}/include/uhd \
     -DENABLE_DEFAULT=False \
     -DENABLE_GR_LOG=False \
@@ -738,8 +770,6 @@ make install
 
 cd ${TOP_BUILD_DIR}
 
-
-
 ############################################################
 ##          GRAnd
 ############################################################
@@ -754,13 +784,13 @@ then
     echo "gr-grand file already cloned; skipping"
 else
     echo "Git cloning gr-grand"
-    git clone https://github.com/trondeau/${GRAND_DIR}
+    git clone https://github.com/Hoernchen/${GRAND_DIR}
     
     #no cppunit for now
-	sed -i -e '106d;' ${GRAND_DIR}/CMakeLists.txt
-	sed -i -e '115,117d;' ${GRAND_DIR}/CMakeLists.txt
-	sed -i -e '134d;' ${GRAND_DIR}/CMakeLists.txt
-	sed -i '60s/system/system thread/' ${GRAND_DIR}/CMakeLists.txt
+#	sed -i -e '106d;' ${GRAND_DIR}/CMakeLists.txt
+#	sed -i -e '115,117d;' ${GRAND_DIR}/CMakeLists.txt
+#	sed -i -e '134d;' ${GRAND_DIR}/CMakeLists.txt
+#	sed -i '60s/system/system thread/' ${GRAND_DIR}/CMakeLists.txt
 fi
 
 cd ${GRAND_DIR}
@@ -775,7 +805,7 @@ cd build
 PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig
 cmake -Wno-dev \
 	-DANDROID_NATIVE_API_LEVEL=21 \
-	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang \
 	-DANDROID_STL=c++_shared \
 		-DBoost_ATOMIC_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_atomic.a \
 	-DBoost_ATOMIC_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_atomic.a \
@@ -813,8 +843,6 @@ make -s install
 
 cd ${TOP_BUILD_DIR}
 
-
-
 ############################################################
 ##          GR-OSMOSDR DEPENDENCY
 ############################################################
@@ -829,7 +857,7 @@ then
     echo "gr-osmosdr file already cloned; skipping"
 else
     echo "Git cloning gr-osmosdr"
-    git clone https://github.com/trondeau/${OSMOSDR_DIR}
+    git clone https://github.com/Hoernchen/${OSMOSDR_DIR}
 fi
 
 cd ${OSMOSDR_DIR}
@@ -846,7 +874,7 @@ export PKG_CONFIG_SYSROOT_DIR=${SYS_ROOT}
 
 cmake -Wno-dev \
 	-DANDROID_NATIVE_API_LEVEL=21 \
-	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang \
 	-DANDROID_STL=c++_shared \
 	-DBoost_ATOMIC_LIBRARY_DEBUG:FILEPATH=$PREFIX/lib/libboost_atomic.a \
 	-DBoost_ATOMIC_LIBRARY_RELEASE:FILEPATH=$PREFIX/lib/libboost_atomic.a \
@@ -975,6 +1003,7 @@ fi
 
 cd ${NETTLE_DIR}
 
+
 mkdir -p build
 cd build
 
@@ -988,13 +1017,43 @@ export STRIP="arm-linux-androideabi-strip"
 echo ""; echo ""
 echo "Configuring NETTLE"
 ../configure --host=arm-eabi --build=x86_64-linux --enable-mini-gmp\
-  --prefix=$PREFIX \
+  --prefix=$PREFIX --disable-ld-version-script \
   LIBS="-lc -lgcc -march=armv7-a -mfloat-abi=softfp -mfpu=neon" \
   CC="clang -march=armv7-a -mfloat-abi=softfp -mfpu=neon"
 
+#sed -i '257,262d' Makefile
+#sed -i '262,267d' Makefile
 echo "\n\nBuilding and installing NETTLE"
 make -s -j${PARALLEL}
 make -s install
+
+#####
+#build this twice to get rid of the soname
+######
+rm $PREFIX/lib/libnettle.so
+rm $PREFIX/lib/libhogweed.so
+rm libnettle.so
+rm libhogweed.so
+
+sed -i "s/-Wl,--version-script=libnettle.map//g" ../configure
+sed -i "s/-Wl,--version-script=libhogweed.map//g" ../configure
+sed -i "s/\$(LIBNETTLE_FORLINK).\$(LIBNETTLE_MAJOR)/\$(LIBNETTLE_FORLINK)/g" ../configure
+sed -i "s/\$(LIBHOGWEED_FORLINK).\$(LIBHOGWEED_MAJOR)/\$(LIBHOGWEED_FORLINK)/g" ../configure
+
+../configure --host=arm-eabi --build=x86_64-linux --enable-mini-gmp\
+  --prefix=$PREFIX --disable-ld-version-script \
+  LIBS="-lc -lgcc -march=armv7-a -mfloat-abi=softfp -mfpu=neon" \
+  CC="clang -march=armv7-a -mfloat-abi=softfp -mfpu=neon"
+
+#sed -i '257,262d' Makefile
+#sed -i '262,267d' Makefile
+echo "\n\nBuilding and installing NETTLE"
+set -e
+make -s -j${PARALLEL}
+set +e
+
+cp -a libnettle.so $PREFIX/lib/
+cp -a libhogweed.so $PREFIX/lib/
 
 unset SYS_ROOT
 unset CC
@@ -1144,59 +1203,24 @@ cd ${TOP_BUILD_DIR}
 echo ""; echo ""; echo ""; echo ""
 
 CLAPACK_VER=3.2.1
-CLAPACK_DIR=clapack-${CLAPACK_VER}
-CLAPACK_URL="http://www.netlib.org/clapack/clapack-3.2.1.tgz"
+CLAPACK_DIR=clapack
+#CLAPACK_URL="http://www.netlib.org/clapack/clapack-3.2.1.tgz"
 
-if [ -e "${CLAPACK_DIR}.tgz" ];
+if [ -e "${CLAPACK_DIR}" ];
 then
-    echo "CLAPACK file already downloaded; skipping"
+    echo "clapack file already cloned; skipping"
 else
-    echo "Downloading CLAPACK tarball"
-    wget ${CLAPACK_URL}
+    echo "Git cloning clapack"
+    git clone git://github.com/Hoernchen/clapack
 fi
 
-if [ -d ${CLAPACK_DIR} ];
-then
-    echo "CLAPACK directory expanded; skipping"
-    cd ${CLAPACK_DIR}
-
-else
-    echo "Expanding CLAPACK tarball"
-    tar xzf ${CLAPACK_DIR}.tgz
-    mv CLAPACK-3.2.1 clapack-3.2.1
-    chmod +r -R ${CLAPACK_DIR}
-    
-    cd ${CLAPACK_DIR}
-
-
-	mv make.inc.example make.inc
-	sed -i 's/gcc/clang/g' make.inc
-	#sed -i '31s/lapack_install//' Makefile
-	sed -i -e '19,20d' Makefile
-	sed -i "19i TAB( cd INSTALL; \$(MAKE) )" Makefile
-	sed -i "19s/TAB/\t/" Makefile
-
-	sed -i -e '12d' F2CLIBS/libf2c/sysdep1.h0
-	sed -i -e '12s/__off64_t/off64_t/' F2CLIBS/libf2c/sysdep1.h0
-
-	sed -i '23s/ld/arm-linux-androideabi-ld/'  F2CLIBS/libf2c/Makefile
-	sed -i '32s/uninit.o//'  F2CLIBS/libf2c/Makefile
-	sed -i '75s/ar/arm-linux-androideabi-ar/'  F2CLIBS/libf2c/Makefile
-	sed -i -e '185,188d' F2CLIBS/libf2c/Makefile
-	touch F2CLIBS/libf2c/arith.h
-	
-	### not part of openblas? see github issue
-	sed -i -e '235,243d;' BLAS/WRAP/cblaswr.c
-	sed -i -e '216,224d;' BLAS/WRAP/cblaswr.c
-
-
-fi
+cd ${CLAPACK_DIR}
 
 
 cp $PREFIX/lib/libopenblas_armv5p-r0.2.18.a blas_LINUX.a
 
 
-sed -i '23s/__off64_t/off64_t/'  F2CLIBS/libf2c/sysdep1.h0
+#sed -i '23s/__off64_t/off64_t/'  F2CLIBS/libf2c/sysdep1.h0
 
 export SYS_ROOT="$ANDROID_STANDALONE_TOOLCHAIN/sysroot"
 export CC="clang --sysroot=$SYS_ROOT"
@@ -1235,7 +1259,7 @@ unset AR
 unset RANLIB
 unset STRIP
 
-
+cd ${TOP_BUILD_DIR}
 
 ############################################################
 ##          ARMADILLO DEPENDENCY
@@ -1277,8 +1301,8 @@ export PKG_CONFIG_SYSROOT_DIR=${SYS_ROOT}
 
 cmake -Wno-dev \
 	-DANDROID_NATIVE_API_LEVEL=21 \
-	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
-	-DANDROID_STL=c++_shared \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang \
+	-DANDROID_STL=c++_static \
 	-DLAPACK_LIBRARY=$PREFIX/lib/lapack_LINUX_wrap.a \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
@@ -1333,8 +1357,9 @@ export PKG_CONFIG_LIBDIR=$PREFIX/lib/pkgconfig
 export PKG_CONFIG_SYSROOT_DIR=${SYS_ROOT}
 
 cmake -Wno-dev \
+	-DBUILD_SHARED_LIBS=ON \
 	-DANDROID_NATIVE_API_LEVEL=21 \
-	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang \
 	-DANDROID_STL=c++_shared \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
@@ -1363,7 +1388,7 @@ then
     echo "GLOG file already cloned; skipping"
 else
     echo "Git cloning GLOG"
-    git clone https://github.com/google/${GLOG_DIR}.git
+    git clone https://github.com/Hoernchen/${GLOG_DIR}.git
 fi
 
 cd ${GLOG_DIR}
@@ -1371,13 +1396,14 @@ cd ${GLOG_DIR}
 echo ""; echo ""
 echo "Configuring GLOG"
 
-sed -i -e '457,545d' CMakeLists.txt
+#sed -i -e '457,545d' CMakeLists.txt
 
 mkdir -p build
 cd build
 cmake -Wno-dev \
+	-DBUILD_SHARED_LIBS=ON \
 	-DANDROID_NATIVE_API_LEVEL=21 \
-	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang \
 	-DANDROID_STL=c++_shared \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
@@ -1391,10 +1417,9 @@ make -s -j${PARALLEL}
 make -s install
 
 cd ${TOP_BUILD_DIR}
-
-##############################
-##          GNSS-SDR-VOLK
-##############################
+###############################
+###          GNSS-SDR-VOLK
+###############################
 
 echo ""; echo ""; echo ""; echo ""
 
@@ -1406,58 +1431,62 @@ then
     echo "gnss-sdr already cloned; skipping"
 else
     echo "Git cloning gnss-sdr-volk"
-    git clone git://github.com/gnss-sdr/gnss-sdr
-	cd ${GNSSSDR_DIR}
-	patch -p1 < ../gnss-sdr.diff
-	cd ${TOP_BUILD_DIR}
+    git clone git://github.com/Hoernchen/gnss-sdr
 fi
 
 cd ${GNSSSDR_DIR}/src/algorithms/libs/volk_gnsssdr_module/volk_gnsssdr/
+
+#git checkout ${OSMOSDR_VER}
 
 echo ""; echo ""
 echo "Configuring gnss-sdr-volk"
 mkdir -p build
 cd build
 
+
+###
+# what the literal fuck. find /opt/android-ndk-r12b/ -type f -iname "*libm*" | xargs grep cargf | sort
+# -> cargf is exported by the STATIC libm, but only available in the dynamically linked libm on api level > 22
+# -> api level set to > 22
+####
 cmake -Wno-dev \
-	-DANDROID_NATIVE_API_LEVEL=21 \
-	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+    -DCMAKE_BUILD_TYPE=Release \
+	-DANDROID_NATIVE_API_LEVEL=23 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang \
 	-DANDROID_STL=c++_shared \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_PREFIX_PATH=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
       -DGIT_EXECUTABLE=/usr/bin/git \
       -DENABLE_OSMOSDR=ON -DBOOST_ROOT=$PREFIX -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
-      -DGLOG_INCLUDE_DIR=$PREFIX\include\glog -DGLOG_LIBRARIES=$PREFIX\lib\libglog.a \
+      -DGLOG_INCLUDE_DIR=$PREFIX\include\glog -DGLOG_LIBRARIES=$PREFIX\lib\libglog.so \
       -DGLOG_ROOT=$PREFIX -DGFlags_ROOT_DIR=$PREFIX \
       -DPYTHON_EXECUTABLE=/usr/bin/python \
       ../
 
-sed -i 's/-lc++//g' apps/CMakeFiles/volk_gnsssdr_profile.dir/link.txt
-sed -i 's/-lc++//g' apps/CMakeFiles/volk_gnsssdr-config-info.dir/link.txt
+#sed -i 's/-lc++//g' apps/CMakeFiles/volk_gnsssdr_profile.dir/link.txt
+#sed -i 's/-lc++//g' apps/CMakeFiles/volk_gnsssdr-config-info.dir/link.txt
 echo ""; echo ""
 echo "Building and installing gnss-sdr-volk"
-make -s -j${PARALLEL}
+make -s -j${PARALLEL} VERBOSE=1
 make -s install
 
 cd ${TOP_BUILD_DIR}
-
-##############################
-##          GNSS-SDR
-##############################
+###############################
+###          GNSS-SDR
+###############################
 
 echo ""; echo ""; echo ""; echo ""
 
 GNSSSDR_DIR=gnss-sdr
-#OSMOSDR_VER=android5
 
 if [ -e "${GNSSSDR_DIR}" ];
 then
     echo "gnss-sdr file already cloned; skipping"
 else
     echo "Git cloning gnss-sdr"
-    git clone git://github.com/gnss-sdr/gnss-sdr
-    sed -i 's/-lc++//g'  ${GNSSSDR_DIR}/src/tests/CMakeLists.txt
+    git clone git://github.com/Hoernchen/gnss-sdr
+#    sed -i 's/-lc++//g'  ${GNSSSDR_DIR}/src/tests/CMakeLists.txt
 fi
 
 cd ${GNSSSDR_DIR}
@@ -1468,67 +1497,32 @@ echo "Configuring gnss-sdr"
 mkdir -p build
 cd build
 
-
+#		-DCMAKE_BUILD_TYPE=Debug
 cmake -Wno-dev \
-		-DCMAKE_BUILD_TYPE=Debug \
-	-DANDROID_NATIVE_API_LEVEL=21 \
-	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang3.6 \
+    -DCMAKE_BUILD_TYPE=Release \
+	-DANDROID_NATIVE_API_LEVEL=23 \
+	-DANDROID_TOOLCHAIN_NAME=arm-linux-androideabi-clang \
 	-DANDROID_STL=c++_shared \
       -DCMAKE_INSTALL_PREFIX=$PREFIX \
       -DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN \
       -DCMAKE_PREFIX_PATH=$PREFIX \
       -DGIT_EXECUTABLE=/usr/bin/git \
       -DENABLE_OSMOSDR=ON -DBOOST_ROOT=$PREFIX -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
-      -DGLOG_INCLUDE_DIR=$PREFIX/include/glog -DGLOG_LIBRARIES=$PREFIX/lib/libglog.a \
+      -DGLOG_INCLUDE_DIR=$PREFIX/include/glog -DGLOG_LIBRARIES=$PREFIX/lib/libglog.so \
       -DGLOG_ROOT=$PREFIX -DGFlags_ROOT_DIR=$PREFIX \
-      -DGTEST_DIR=/opt/android-ndk-r11c/sources/third_party/googletest/googletest/ \
+      -DGTEST_DIR=${ANDROID_NDK}/sources/third_party/googletest/googletest/ \
       ../
 
 #dirty FIXME
-find . -name link.txt | xargs sed -i 's/-lc++//g'
+#find . -name link.txt | xargs sed -i 's/-lc++//g'
 
 
 echo ""; echo ""
 echo "Building and installing gnss-sdr"
 make -s -j${PARALLEL} V=1
 make -s install
+cp -a  src/tests/librun_tests.so $PREFIX/lib || true
 
 cd ${TOP_BUILD_DIR}
 
 
-
-#############################################################
-###          BUILD MANIFEST FILE
-#############################################################
-
-#cd ${TOP_BUILD_DIR}
-#cd ${RTLSDR_DIR}
-#RTLSDR_VER=`git rev-parse HEAD`
-
-#cd ${TOP_BUILD_DIR}
-#cd ${UHD_DIR}
-#UHD_VER=`git rev-parse HEAD`
-
-#cd ${TOP_BUILD_DIR}
-#cd ${VOLK_DIR}
-#VOLK_VER=`git rev-parse HEAD`
-
-#cd ${TOP_BUILD_DIR}
-#cd ${GNURADIO_DIR}
-#GNURADIO_VER=`git rev-parse HEAD`
-
-#cd ${TOP_BUILD_DIR}
-#cd ${OSMOSDR_DIR}
-#OSMOSDR_VER=`git rev-parse HEAD`
-
-#echo "Boost: ${BOOST_VER}" > ${PREFIX}/MANIFEST.txt
-#echo "FFTW: ${FFTW_VER}"   >> ${PREFIX}/MANIFEST.txt
-#echo "OpenSSL: ${OPENSSL_VER}" >> ${PREFIX}/MANIFEST.txt
-#echo "Thrift: ${THRIFT_VER}" >> ${PREFIX}/MANIFEST.txt
-#echo "ZeroMQ: ${ZEROMQ_VER}" >> ${PREFIX}/MANIFEST.txt
-#echo "LibUSB: ${LIBUSB_VER}" >> ${PREFIX}/MANIFEST.txt
-#echo "RTL-SDR: ${RTLSDR_VER}" >> ${PREFIX}/MANIFEST.txt
-#echo "UHD: ${UHD_VER}" >> ${PREFIX}/MANIFEST.txt
-#echo "VOLK: ${VOLK_VER}" >> ${PREFIX}/MANIFEST.txt
-#echo "gr-omsosdr: ${OSMOSDR_VER}" >> ${PREFIX}/MANIFEST.txt
-#echo "GNU Radio: ${GNURADIO_VER}" >> ${PREFIX}/MANIFEST.txt
